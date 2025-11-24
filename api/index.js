@@ -1,76 +1,104 @@
-// 1. Importar as bibliotecas
-const express = require('express');
+// Importações necessárias
 const admin = require('firebase-admin');
-const cors = require('cors'); // Importe o cors
-
-// 2. Inicializar o Express
+const express = require('express');
 const app = express();
 
-// 3. Inicializar o Firebase Admin (MODO VERCEL)
-try {
-  if (!admin.apps.length) {
-    const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT_JSON);
-    admin.initializeApp({
-      credential: admin.credential.cert(serviceAccount)
-    });
-  }
-} catch (e) {
-  console.error('Falha ao inicializar Firebase Admin:', e);
+// --- FIREBASE ADMIN INITIALIZATION (Executado uma única vez) ---
+const serviceAccountString = process.env.FIREBASE_SERVICE_ACCOUNT_JSON;
+
+if (!admin.apps.length) {
+    try {
+        if (!serviceAccountString) {
+            // Se a variável estiver ausente, lançamos um erro claro para os logs do Vercel
+            throw new Error("Variável FIREBASE_SERVICE_ACCOUNT_JSON está ausente. Verifique os Secrets do Vercel.");
+        }
+        
+        // Converte a string JSON (do Secret do Vercel) em um objeto JavaScript
+        const serviceAccount = JSON.parse(serviceAccountString);
+
+        admin.initializeApp({
+            credential: admin.credential.cert(serviceAccount)
+        });
+
+        console.log("Firebase Admin inicializado com credenciais seguras.");
+    } catch (error) {
+        console.error("ERRO CRÍTICO: Falha ao inicializar o Firebase Admin.", error);
+        // Lançar um erro aqui garante que o Vercel capture a falha no log de invocação.
+        throw new Error("Credenciais do Firebase Admin inválidas ou erro de Parse JSON. Detalhe: " + error.message);
+    }
 }
 
+// Obtém a instância do Firestore
 const db = admin.firestore();
 
-// 4. Configurar os Middlewares
-// --- CORREÇÃO APLICADA AQUI ---
-app.use(cors({ origin: '*' })); // Habilita o CORS para permitir acesso de qualquer site
-app.use(express.json());
+// --- API MIDDLEWARE (CORS) ---
 
-// --- 5. ROTAS (ENDPOINTS) DA API ---
+// Permite que seu frontend (em qualquer domínio) acesse esta API
+app.use((req, res, next) => {
+    res.setHeader('Access-Control-Allow-Origin', '*'); 
+    res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+    if (req.method === 'OPTIONS') {
+        return res.status(200).end();
+    }
+    next();
+});
 
+// --- API ROUTES ---
+
+// 1. Endpoint para listar todos os animes
+// Rota esperada: /api/animes
+app.get('/api/animes', async (req, res) => {
+    try {
+        const animesRef = db.collection('animes');
+        const snapshot = await animesRef.get();
+
+        if (snapshot.empty) {
+            return res.status(200).json([]);
+        }
+
+        const animes = snapshot.docs.map(doc => ({
+            id: doc.id,
+            ...doc.data()
+        }));
+
+        res.status(200).json(animes);
+    } catch (error) {
+        console.error("Erro ao buscar a lista de animes:", error);
+        res.status(500).json({ 
+            error: "Erro interno do servidor ao buscar dados.",
+            details: error.message 
+        });
+    }
+});
+
+// 2. Endpoint para buscar um anime por ID
+// Rota esperada: /api/animes/:id
+app.get('/api/animes/:id', async (req, res) => {
+    try {
+        const { id } = req.params;
+        const animeDoc = await db.collection('animes').doc(id).get();
+
+        if (!animeDoc.exists) {
+            return res.status(404).json({ error: "Anime não encontrado." });
+        }
+
+        res.status(200).json({ id: animeDoc.id, ...animeDoc.data() });
+    } catch (error) {
+        console.error(`Erro ao buscar anime ID ${req.params.id}:`, error);
+        res.status(500).json({ 
+            error: "Erro interno do servidor ao buscar detalhes.",
+            details: error.message 
+        });
+    }
+});
+
+
+// Rota raiz (padrão do Vercel)
 app.get('/', (req, res) => {
-  res.send('API de Séries está funcionando!');
+    res.status(200).send("API de Animes Maxplay está operacional. Use /api/animes para acessar os dados.");
 });
 
-app.get('/series', async (req, res) => {
-  try {
-    const seriesRef = db.collection('series');
-    const snapshot = await seriesRef.get();
 
-    if (snapshot.empty) {
-      return res.status(404).json({ message: 'Nenhuma série encontrada.' });
-    }
-
-    const seriesList = [];
-    snapshot.forEach(doc => {
-      seriesList.push({
-        id: doc.id,
-        ...doc.data()
-      });
-    });
-
-    res.status(200).json(seriesList);
-  } catch (error) {
-    console.error("Erro ao buscar séries:", error);
-    res.status(500).json({ message: 'Erro interno do servidor.' });
-  }
-});
-
-app.get('/series/:id', async (req, res) => {
-  try {
-    const seriesId = req.params.id;
-    const docRef = db.collection('series').doc(seriesId);
-    const doc = await docRef.get();
-
-    if (!doc.exists) {
-      return res.status(404).json({ message: 'Série não encontrada.' });
-    }
-
-    res.status(200).json({ id: doc.id, ...doc.data() });
-  } catch (error) {
-    console.error("Erro ao buscar série por ID:", error);
-    res.status(500).json({ message: 'Erro interno do servidor.' });
-  }
-});
-
-// 6. EXPORTAR O APP PARA A VERCEL
+// Exporta a aplicação Express para o Vercel
 module.exports = app;
